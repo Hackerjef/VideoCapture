@@ -1,12 +1,11 @@
 import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-
-from gevent import monkey
-monkey.patch_all()
-
-import sounddevice as sd
-from pathlib import Path
-import numpy as np
+import gevent
+import gevent.monkey
+import functools
+import sounddevice
+import numpy
+import pathlib
 import pygame
 import pygame.camera
 import pygame.time
@@ -18,6 +17,8 @@ import gevent.event
 import sys
 import time
 
+gevent.monkey.patch_all()
+
 pygame.init()
 pygame.camera.init(None)
 pygame.display.set_caption("Capture")
@@ -25,7 +26,7 @@ pygame.transform.set_smoothscale_backend("MMX")
 
 
 class Settings:
-    config_file = Path("config.ini")
+    config_file = pathlib.Path("config.ini")
     defaults = {
         'audio': {
             'in': "None",
@@ -88,7 +89,7 @@ class AudioThread(gevent.threading.Thread):
         self.multiplier = 0.10
         self.mute = False
 
-    def AudioCallback(self, indata, outdata, frames, time, status: sd.CallbackFlags):  # noqa
+    def AudioCallback(self, indata, outdata, frames, time, status: sounddevice.CallbackFlags):  # noqa
         if self.mute:
             outdata[:] = indata * 0
             return
@@ -175,9 +176,9 @@ class Game:
     def grayscale(self, img):
         arr = pygame.surfarray.array3d(img)
         # luminosity filter
-        mean_arr = np.mean(arr, axis=2)
-        mean_arr3d = mean_arr[..., np.newaxis]
-        new_arr = np.repeat(mean_arr3d[:, :, :], 3, axis=2)
+        mean_arr = numpy.mean(arr, axis=2)
+        mean_arr3d = mean_arr[..., numpy.newaxis]
+        new_arr = numpy.repeat(mean_arr3d[:, :, :], 3, axis=2)
         return pygame.surfarray.make_surface(new_arr)
 
     def get_image(self):
@@ -205,8 +206,8 @@ class Game:
                     idata = self.get_image()
                     if idata:
                         # TODO: Switch between the two if scalling is enabled (Got to do more at the end
-                        # self.screen.blit(self.aspect_scale(idata), (0, 0))
-                        self.screen.blit(idata, (0, 0))
+                        self.screen.blit(self.aspect_scale(idata), (0, 0))
+                        #self.screen.blit(idata, (0, 0))
                     else:
                         self.screen.fill((0, 0, 0))
                 else:
@@ -234,33 +235,38 @@ class Game:
             pygame.display.update()
             self.fps_over_time.append(self.clock.get_fps())
             self.clock.tick()
-            # print(self.clock.get_fps())
+            #print(self.clock.get_fps())
 
     def aspect_scale(self, img):
         bx, by = self.screen_size_current
-        ix, iy = img.get_size()
-        if ix > iy:
-            # fit to width
-            scale_factor = bx / float(ix)
-            sy = scale_factor * iy
-            if sy > by:
-                scale_factor = by / float(iy)
-                sx = scale_factor * ix
-                sy = by
-            else:
-                sx = bx
-        else:
-            # fit to height
-            scale_factor = by / float(iy)
-            sx = scale_factor * ix
-            if sx > bx:
-                scale_factor = bx / float(ix)
-                sx = bx
-                sy = scale_factor * iy
-            else:
-                sy = by
 
-        return pygame.transform.smoothscale(img, (sx, sy))
+        # cache inorder to save some cpu cycles (why keep getting the scale factor if the res doesn't change :)
+        @functools.cache
+        def _aspect_scale(x, y):
+            ix, iy = img.get_size()
+            if ix > iy:
+                # fit to width
+                scale_factor = x / float(ix)
+                sy = scale_factor * iy
+                if sy > y:
+                    scale_factor = y / float(iy)
+                    sx = scale_factor * ix
+                    sy = y
+                else:
+                    sx = x
+            else:
+                # fit to height
+                scale_factor = y / float(iy)
+                sx = scale_factor * ix
+                if sx > x:
+                    scale_factor = x / float(ix)
+                    sx = x
+                    sy = scale_factor * iy
+                else:
+                    sy = y
+            return sx, sy
+
+        return pygame.transform.smoothscale(img, _aspect_scale(bx, by))
 
     def on_keypress(self, event):
         match event.key:
@@ -309,8 +315,8 @@ class Game:
 
     def get_audio_devices(self, atype="all"):  # noqa
         atup = []
-        devices = sd.query_devices()
-        for aid, device in enumerate(devices):
+        _devices = sounddevice.query_devices()
+        for aid, device in enumerate(_devices):
             if device['name'] in (
                     "Microphone ()", "Output ()", "Microsoft Sound Mapper", "Primary Sound Capture Driver"):
                 continue
@@ -343,7 +349,7 @@ class Game:
         if self.video:
             self.video.stop()
         pygame.camera.quit()
-        print(f"Average: {round(np.average(self.fps_over_time), 2)}")
+        print(f"Average: {round(numpy.average(self.fps_over_time), 2)}")
 
 
 @click.group(invoke_without_command=True)
@@ -369,7 +375,7 @@ def cli(ctx):
 @cli.command()
 def devices():
     print("Sound devices: (> means default input, < means default output) (Better to select defaults)")
-    print(sd.query_devices())
+    print(sounddevice.query_devices())
     print("Video devices:")
     for vid, video in enumerate(pygame.camera.list_cameras()):
         print(f"[{vid}] {video}")
@@ -392,14 +398,3 @@ def config(reset):
 
 if __name__ == '__main__':
     cli()
-    # print("Starting application :)")
-    # game = Game()
-    # try:
-    #     game.loop()
-    # except SystemExit:
-    #     pass
-    # except KeyboardInterrupt:
-    #     pass
-    # game.shutdown()
-    # pygame.quit()
-    # sys.exit()
