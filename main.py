@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import gevent.threading
 from gevent import monkey
 
 monkey.patch_all()
+import configparser
 import gevent.event
 import sys
 import time
@@ -17,6 +20,58 @@ pygame.init()
 pygame.camera.init(None)
 pygame.display.set_caption("Capture")
 pygame.transform.set_smoothscale_backend("MMX")
+
+
+class Settings:
+    config_file = Path("config.ini")
+    defaults = {
+        'audio': {
+            'in': "None",
+            'out': "None",
+            'volume': "0.10",
+            'mute': "False"
+        },
+        'video': {
+            'device': "None",
+            'RESX': "1280",
+            'RESY':"720"
+        }
+    }
+
+    def __init__(self):
+        self.config = configparser.ConfigParser()
+
+        # set defaults:
+        for section in self.defaults.keys():
+            self.config.add_section(section)
+        for section, dcfgs in self.defaults.items():
+            for key, value in dcfgs.items():
+                self.config.set(section, key, value)
+
+        if not self.config_file.exists():
+            self.write_config()
+        self.config.read(self.config_file)
+        self.display_config()
+
+    def write_config(self):
+        self.config.write(self.config_file.open("w"))
+
+    def display_config(self):
+        for section, dcfg in self.config.items():
+            for key, value in dcfg.items():
+                print(f"[{section}] {key} = {value}")
+
+    def get(self, vtype, section, key):
+        val = self.config.get(section, key)
+        if val != "None":
+            if vtype == bool:
+                return "True" == val
+            return vtype(val)
+        else:
+            return None
+
+    def get_res(self):
+        return int(self.config.get('video', 'RESX')), int(self.config.get('video', 'RESY'))
 
 
 class AudioThread(gevent.threading.Thread):
@@ -43,7 +98,7 @@ class AudioThread(gevent.threading.Thread):
             try:
                 if self.audio_out is not None and self.audio_in is not None:
                     devicein = sdi.query_devices(self.audio_in)
-                    self.stream = sdi.Stream(device=(self.audio_in, self.audio_out), samplerate=48000, blocksize=4096,
+                    self.stream = sdi.Stream(device=(self.audio_in, self.audio_out), samplerate=44100, blocksize=4096,
                                              channels=devicein['max_input_channels'], callback=self.AudioCallback,
                                              latency=0)
                     self.stream.start()
@@ -83,30 +138,29 @@ class AudioThread(gevent.threading.Thread):
         self.multiplier = vol
 
 
-RES = (1920, 1017)
-
-
 class Game:
     def __init__(self):
-        # CONFIG VALUES
-        # TODO: Make config class, :)
-        self.video_device: str = "USB Video"
-        self.audio_device_in: int = 2
-        self.audio_device_out: int = 9
+        self.settings = Settings()
 
         # Devices setup
         self.menu: pygame_menu.Menu = None  # noqa
         self.video = None
         self.audio = AudioThread()
-        self.audio.set_audio_devices(self.audio_device_in, self.audio_device_out, False)
+        self.audio.set_audio_devices(self.settings.get(int, 'audio', 'in'), self.settings.get(int, 'audio', 'out'), False)
+        self.audio.set_volume(self.settings.get(float, 'audio', 'volume'))
+        self.audio.mute = self.settings.get(bool, 'audio', 'mute')
         self.audio.start()
-        self.video = pygame.camera.Camera(self.video_device, RES)
-        self.video.start()
-        self.screen_size = RES
+
+        if self.settings.get(str, 'video', 'device'):
+            self.video = pygame.camera.Camera(self.settings.get(str, 'video', 'device'), self.settings.get_res())
+            self.video.start()
+        else:
+            self.video = None
+        self.screen_size_current = self.settings.get_res()
 
         # game setup
         self.running = True
-        self.screen = pygame.display.set_mode(RES, pygame.RESIZABLE)
+        self.screen = pygame.display.set_mode(self.settings.get_res(), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
         self.frameTimer = time.time() + 0.015
         self.fps_over_time = []
@@ -147,7 +201,9 @@ class Game:
                 if self.video:
                     idata = self.get_image()
                     if idata:
-                        self.screen.blit(self.aspect_scale(idata), (0,0))
+                        # TODO: Switch between the two if scalling is enabled (Got to do more at the end
+                        #self.screen.blit(self.aspect_scale(idata), (0, 0))
+                        self.screen.blit(idata, (0, 0))
                     else:
                         self.screen.fill((0, 0, 0))
                 else:
@@ -163,8 +219,7 @@ class Game:
                     case pygame.KEYDOWN:
                         self.on_keypress(event)
                     case pygame.VIDEORESIZE:
-                        self.screen_size = event.dict['size']
-                        print(event.dict['size'])
+                        self.screen_size_current = event.dict['size']
                     case _:
                         continue
             if self.menu.is_enabled():
@@ -179,7 +234,7 @@ class Game:
             # print(self.clock.get_fps())
 
     def aspect_scale(self, img):
-        bx, by = self.screen_size
+        bx, by = self.screen_size_current
         ix, iy = img.get_size()
         if ix > iy:
             # fit to width
@@ -213,26 +268,33 @@ class Game:
 
     def on_VolumeMute(self, option):
         self.audio.mute = option
+        self.settings.config.set('audio', 'mute', str(option))
+        self.settings.write_config()
 
     def on_VolumeChange(self, val):
         val /= 10
         self.audio.set_volume(val)
+        self.settings.config.set('audio', 'volume', str(val))
+        self.settings.write_config()
 
     def on_VideoChange(self, args, *kwargs):
         if self.video:
             self.video.stop()
             self.video = None
-        self.video = pygame.camera.Camera(args[0][0], RES)
-        self.video_device = args[0][0]
+        self.video = pygame.camera.Camera(args[0][0], self.settings.get_res())
+        self.settings.config.set('video', 'device', args[0][0])
+        self.settings.write_config()
         self.video.start()
 
     def on_AudioOutChange(self, args, *kwargs):
-        self.audio_device_out = args[0][1]
-        self.audio.set_audio_devices(audio_in=self.audio_device_in, audio_out=self.audio_device_out, restart=True)
+        self.settings.config.set('audio', 'out', args[0][1])
+        self.settings.write_config()
+        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'), audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
 
     def on_AudioInChange(self, args, *kwargs):
-        self.audio_device_in = args[0][1]
-        self.audio.set_audio_devices(audio_in=self.audio_device_in, audio_out=self.audio_device_out, restart=True)
+        self.settings.config.set('audio', 'in', args[0][1])
+        self.settings.write_config()
+        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'), audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
 
     def get_video_devices(self):  # noqa
         vtup = []

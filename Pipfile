@@ -8,11 +8,12 @@ pygame = "*"
 sounddevice = "*"
 numpy = "*"
 pygame-menu = "*"
-cx-freeze = "*"
 gevent = "*"
-pypiwin32 = "*"
+pyopengl = "*"
+pyopengl-accelerate = "*"
 
 [dev-packages]
+cx-freeze = "*"
 
 [requires]
 python_version = "3.10"
