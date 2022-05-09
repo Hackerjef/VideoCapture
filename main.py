@@ -1,20 +1,22 @@
-from pathlib import Path
+import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
-import gevent.threading
 from gevent import monkey
-
 monkey.patch_all()
-import configparser
-import gevent.event
-import sys
-import time
 
+import sounddevice as sd
+from pathlib import Path
 import numpy as np
 import pygame
 import pygame.camera
 import pygame.time
 import pygame_menu
-import sounddevice as sd
+import click
+import gevent.threading
+import configparser
+import gevent.event
+import sys
+import time
 
 pygame.init()
 pygame.camera.init(None)
@@ -34,7 +36,7 @@ class Settings:
         'video': {
             'device': "None",
             'RESX': "1280",
-            'RESY':"720"
+            'RESY': "720"
         }
     }
 
@@ -146,7 +148,8 @@ class Game:
         self.menu: pygame_menu.Menu = None  # noqa
         self.video = None
         self.audio = AudioThread()
-        self.audio.set_audio_devices(self.settings.get(int, 'audio', 'in'), self.settings.get(int, 'audio', 'out'), False)
+        self.audio.set_audio_devices(self.settings.get(int, 'audio', 'in'), self.settings.get(int, 'audio', 'out'),
+                                     False)
         self.audio.set_volume(self.settings.get(float, 'audio', 'volume'))
         self.audio.mute = self.settings.get(bool, 'audio', 'mute')
         self.audio.start()
@@ -202,7 +205,7 @@ class Game:
                     idata = self.get_image()
                     if idata:
                         # TODO: Switch between the two if scalling is enabled (Got to do more at the end
-                        #self.screen.blit(self.aspect_scale(idata), (0, 0))
+                        # self.screen.blit(self.aspect_scale(idata), (0, 0))
                         self.screen.blit(idata, (0, 0))
                     else:
                         self.screen.fill((0, 0, 0))
@@ -289,12 +292,14 @@ class Game:
     def on_AudioOutChange(self, args, *kwargs):
         self.settings.config.set('audio', 'out', args[0][1])
         self.settings.write_config()
-        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'), audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
+        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'),
+                                     audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
 
     def on_AudioInChange(self, args, *kwargs):
         self.settings.config.set('audio', 'in', args[0][1])
         self.settings.write_config()
-        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'), audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
+        self.audio.set_audio_devices(audio_in=self.settings.get(int, 'audio', 'in'),
+                                     audio_out=self.settings.get(int, 'audio', 'out'), restart=True)
 
     def get_video_devices(self):  # noqa
         vtup = []
@@ -341,15 +346,60 @@ class Game:
         print(f"Average: {round(np.average(self.fps_over_time), 2)}")
 
 
-if __name__ == '__main__':
-    print("Starting application :)")
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
+    if not ctx.invoked_subcommand is None:
+        return
+
     game = Game()
+
     try:
         game.loop()
     except SystemExit:
         pass
     except KeyboardInterrupt:
         pass
+
     game.shutdown()
     pygame.quit()
     sys.exit()
+
+
+@cli.command()
+def devices():
+    print("Sound devices: (> means default input, < means default output) (Better to select defaults)")
+    print(sd.query_devices())
+    print("Video devices:")
+    for vid, video in enumerate(pygame.camera.list_cameras()):
+        print(f"[{vid}] {video}")
+
+
+@cli.command()
+@click.option('--reset/--no-reset', default=False)
+def config(reset):
+    if reset and Settings.config_file.exists():
+        fn = f"config_{str(time.time()).split('.')[0]}.ini"
+        print("Old Config:")
+        Settings()
+        os.rename("config.ini", fn)
+        print("New Config:")
+        Settings()
+        print(f"config has been reset - old file is named: {fn}")
+    else:
+        Settings()
+
+
+if __name__ == '__main__':
+    cli()
+    # print("Starting application :)")
+    # game = Game()
+    # try:
+    #     game.loop()
+    # except SystemExit:
+    #     pass
+    # except KeyboardInterrupt:
+    #     pass
+    # game.shutdown()
+    # pygame.quit()
+    # sys.exit()

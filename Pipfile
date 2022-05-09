@@ -11,6 +11,7 @@ pygame-menu = "*"
 gevent = "*"
 pyopengl = "*"
 pyopengl-accelerate = "*"
+click = "*"
 
 [dev-packages]
 cx-freeze = "*"
